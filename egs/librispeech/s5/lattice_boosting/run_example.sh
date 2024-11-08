@@ -14,6 +14,8 @@ export PYTHONPATH=$pywrapfst
 libpython_dir=$(dirname $(which python))/../lib  # relative path to conda env.
 export LD_LIBRARY_PATH=$libpython_dir
 
+## UPDATE TOY-EXAMPLE GRAPH
+./boosting_fst_lib.py
 
 ## SINGLE BOOSTING GRAPH
 words_txt=../data/lang_nosp/words.txt

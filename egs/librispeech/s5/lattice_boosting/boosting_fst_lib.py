@@ -52,12 +52,13 @@ class BoostingFstBuilder:
         self.rho_int = self.word_to_int["#0"]
         del self.word_to_int["#0"]
 
+
     def lattice_boosting_graph(
         self,
         boosted_phrases: list[list[str]],
         word_discount: float = -3.0,
         phrase_discount: float = 0.0,
-    ) -> fst.VectorFst:  # TODO: exact type ?
+    ) -> fst.VectorFst:
         """
         Build lattice-boosting graph for the particular set of boosting phrases.
 
@@ -77,45 +78,33 @@ class BoostingFstBuilder:
 
         # build non-optimized graph
         f = BoostingFstBuilder.__gen_initial_graph(
-            boosted_phrases, self.word_to_int, word_discount, phrase_discount
+            boosted_phrases=boosted_phrases,
+            word_to_int=self.word_to_int,
+            word_discount=word_discount,
+            phrase_discount=phrase_discount,
+            rho_int=self.rho_int,
         )
 
+        # compact the graph by determinization
+        # (merges common prefixes, so a trie subgraph is created)
         f = fst.determinize(f)
-
-        # point all states to initial state by <eps> link with zero cost, make them non-final,
-        # - note: the score discount of the whole boosted word sequence is given to its last word
-        s_start = f.start()
-        for s in range(f.num_states()):
-            if s != s_start:
-                # <eps> link to initial state with zero cost,
-                f.add_arc(s, fst.Arc(ilabel=0, olabel=0, weight=0.0, nextstate=s_start))
-                # make final states non-final,
-                if float(f.final(s)) != float("inf"):
-                    f.set_final(s, float("inf"))
-
-        # only the initial state is final state,
-        f.set_final(s_start, 0.0)
-
-        # add the 'rho' link to initial state
-        # - it matches the non-boosted part of graph
-        # - 'rho' is both input and output symbol
-        rho = self.rho_int
-        f.add_arc(
-            s_start, fst.Arc(ilabel=rho, olabel=rho, weight=0.0, nextstate=s_start)
-        )
 
         return f
 
+
     @staticmethod
     def __gen_initial_graph(
-        boosted_phrases, word_to_int, word_discount, phrase_discount
+        boosted_phrases, word_to_int, word_discount, phrase_discount, rho_int,
     ):
         """
         Generate boosting graph that is not yet optimized (it is larger).
+        The boosted phrases are linear sub-graphs,
+        the common prefixes are not merged.
         """
 
         f = fst.VectorFst()
         s_start = f.add_state()
+
         f.set_start(s_start)
 
         for boosted_phrase in boosted_phrases:
@@ -138,25 +127,41 @@ class BoostingFstBuilder:
 
             # zero weight here,
             s_prev = s_start
-            for w in w_rest:
+            for w in  w_rest:
                 s_next = f.add_state()
+                # word arc
                 f.add_arc(
                     s_prev, fst.Arc(ilabel=w, olabel=w, weight=0.0, nextstate=s_next)
                 )
+                # <eps> link to initial state with zero cost,
+                f.add_arc(
+                    s_next, fst.Arc(ilabel=0, olabel=0, weight=0.0, nextstate=s_start)
+                )
                 s_prev = s_next
 
-            # weight for whole boosted word sequence is 'sitting' on its last word,
-            # - previous words will have 'eps' links to the initial state, only initial state has the 'rho' arc
+            # weight for whole boosted word sequence is 'sitting' on <eps> link from its last word,
+            # - previous words have <eps> links with zero weight
             weight = len(boosted_phrase_ints) * word_discount + phrase_discount
 
             s_next = f.add_state()
+            # word arc
             f.add_arc(
-                s_prev,
-                fst.Arc(ilabel=w_last, olabel=w_last, weight=weight, nextstate=s_next),
+                s_prev, fst.Arc(ilabel=w_last, olabel=w_last, weight=0.0, nextstate=s_next),
+            )
+            # <eps> link to initial state with the score discount weight,
+            f.add_arc(
+                s_next, fst.Arc(ilabel=0, olabel=0, weight=weight, nextstate=s_start)
             )
 
-            # set final state,
-            f.set_final(s_next, 0.0)
+        # add the 'rho' link to initial state
+        # - it matches the non-boosted part of graph
+        # - 'rho' is both input and output symbol
+        f.add_arc(
+            s_start, fst.Arc(ilabel=rho_int, olabel=rho_int, weight=0.0, nextstate=s_start)
+        )
+
+        # only the initial state is final state,
+        f.set_final(s_start, 0.0)
 
         return f
 
@@ -185,7 +190,10 @@ prague 8
 """.encode(),
     )
 
-    boosted_phrases = [["c_s_a", "three", "alfa", "bravo"], ["c_s_a", "alfa", "bravo"]]
+    boosted_phrases = [["c_s_a", "three", "alfa", "bravo"],
+                       ["c_s_a", "alfa", "bravo"],
+                       ["c_s_a", "alfa"]]
+    # note: last boosted phrase is a prefix of the penultimate phrase
 
     builder = BoostingFstBuilder(words_fname)
 
